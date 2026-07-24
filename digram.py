@@ -10,7 +10,7 @@ class KeystrokePipeline:
     def __init__(self, block_size: int = 50):
         self.block_size = block_size
         self.df_digrams = None
-        self.selected_digrams = []
+        self.global_selected_digrams = set()
         self.df_final_blocks = None
         self.baseline_means = {}
 
@@ -57,29 +57,17 @@ class KeystrokePipeline:
         return digram_data, current_h
 
     def _calculate_single_block(self, df):
-        df_filtered = df[df['Digram'].isin(self.selected_digrams)]
         features = ['H1', 'H2', 'UD', 'DD', 'UU', 'H1/UD', 'H2/UD']
         
-        if not df_filtered.empty:
-            df_grouped = df_filtered.groupby('Digram')[features].mean().reset_index()
-            df_grouped['dummy'] = 0
-            df_wide = df_grouped.pivot(index='dummy', columns='Digram', values=features)
-            df_wide.columns = [f"{col[0]}_{col[1]}" for col in df_wide.columns]
-        else:
-            df_wide = pd.DataFrame(index=[0])
-
-        expected_columns = [f"{feature}_{digram}" for feature in features for digram in self.selected_digrams]
-
-        missing_data = {}
-        for col in expected_columns:
-            if col not in df_wide.columns:
-                missing_data[col] = np.nan
-                
-        if missing_data:
-            missing_df = pd.DataFrame([missing_data], index=df_wide.index)
-            df_wide = pd.concat([df_wide, missing_df], axis=1)
-                
-        df_wide = df_wide[expected_columns]
+        if df.empty:
+            return pd.DataFrame()
+            
+        df_grouped = df.groupby('Digram')[features].mean().reset_index()
+        df_grouped['dummy'] = 0
+        
+        df_wide = df_grouped.pivot(index='dummy', columns='Digram', values=features)
+        df_wide.columns = [f"{col[0]}_{col[1]}" for col in df_wide.columns]
+        
         return df_wide
     
     def process_stream(self, record_stream : iter):
@@ -98,7 +86,7 @@ class KeystrokePipeline:
                     yield block
                 buffer = []
     
-    def _generate_digrams(self):
+    def _generate_digrams(self, table_name="raw_baseline"):
         app_dir = pathlib.Path.home() / ".keystroke_auth"
         db_path = app_dir / "baseline_records.db"
         
@@ -115,7 +103,7 @@ class KeystrokePipeline:
             with sqlite.connect(db_path) as conn:
                 conn.execute(f"PRAGMA key = '{db_key}';")
                 
-                query = """
+                query = f"""
                     SELECT 
                         key_pressed AS 'Key', 
                         prev_key AS 'Previous Key', 
@@ -125,7 +113,7 @@ class KeystrokePipeline:
                         dd_time AS 'DD', 
                         uu_time AS 'UU', 
                         afk_flag
-                    FROM raw_baseline
+                    FROM {table_name}
                 """
                 df = pd.read_sql_query(query, conn)
                 
@@ -134,7 +122,7 @@ class KeystrokePipeline:
             return False
 
         if df.empty:
-            print("[!] Error: No records found in the database.")
+            print(f"[!] Error: No records found in the database for table {table_name}.")
             return False
 
         df.columns = df.columns.str.strip()
@@ -174,15 +162,12 @@ class KeystrokePipeline:
     def _select_optimal_digrams(self):
         features = ['H1', 'H2', 'UD', 'DD', 'UU', 'H1/UD', 'H2/UD']
         freq = self.df_digrams.groupby('Digram').size()
-        
 
         valid_digrams = freq[freq >= MIN_FREQ].index
-        
         df_filtered = self.df_digrams[self.df_digrams['Digram'].isin(valid_digrams)]
         
         if df_filtered.empty:
-            self.selected_digrams = []
-            return
+            return []
 
         freq_filtered = df_filtered.groupby('Digram').size()
         var_sum = df_filtered.groupby('Digram')[features].var().sum(axis=1)
@@ -203,15 +188,15 @@ class KeystrokePipeline:
         
         if n_final == 0:
             n_final = 1
-            self.selected_digrams = stats.head(n_final).index.tolist()
+            return stats.head(n_final).index.tolist()
         else:
-            self.selected_digrams = stable_digrams.head(n_final).index.tolist()
+            return stable_digrams.head(n_final).index.tolist()
 
-    def _create_blocks(self):
+    def _create_blocks(self, specific_digrams):
         df = self.df_digrams.copy()
         df['Block_ID'] = np.arange(len(df)) // self.block_size
         
-        df = df[df['Digram'].isin(self.selected_digrams)]
+        df = df[df['Digram'].isin(specific_digrams)]
         if df.empty:
             self.df_final_blocks = pd.DataFrame()
             return
@@ -226,19 +211,27 @@ class KeystrokePipeline:
         df_wide = df_wide.interpolate(method='linear').ffill().bfill()
         self.df_final_blocks = df_wide.fillna(0)
 
-    def build_user_profile(self, output_csv: str):
-        print(f"[*] Extracting baseline data from local secure database ...")
+    def build_user_profile(self, output_csv: str, table_name: str = "raw_baseline"):
+        print(f"[*] Extracting baseline data from local secure database (table: {table_name}) ...")
         
-        if not self._generate_digrams():
-            return
+        if not self._generate_digrams(table_name):
+            return False
             
-        self._select_optimal_digrams()
-        print(f"[*] Selected {len(self.selected_digrams)} most stable digrams.")
+        specific_digrams = self._select_optimal_digrams()
+        if not specific_digrams:
+            print(f"[!] No stable digrams found for {table_name}.")
+            return False
+            
+        print(f"[*] Selected {len(specific_digrams)} most stable digrams for '{table_name}'.")
         
-        self._create_blocks()
+        self.global_selected_digrams.update(specific_digrams)
+        
+        self._create_blocks(specific_digrams)
         
         if not self.df_final_blocks.empty:
             self.df_final_blocks.to_csv(output_csv, index=False)
             print(f"[+] Successfully completed! Created {len(self.df_final_blocks)} blocks.")
+            return True
         else:
             print("[!] Error: Resulting DataFrame is empty.")
+            return False

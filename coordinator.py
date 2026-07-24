@@ -3,6 +3,8 @@ import pandas as pd
 import time
 import os
 import pathlib
+import keyring
+from sqlcipher3 import dbapi2 as sqlite
 from collections import deque
 
 from input import KeystrokeRecorder
@@ -12,13 +14,14 @@ from executor import Executor
 
 class KeystrokeCoordinator:
     def __init__(self, window_size=50):
-        self.recorder = KeystrokeRecorder()
+        self.executor = Executor()
+        
+        self.recorder = KeystrokeRecorder(on_torpedo_callback=self.executor.torpedo)
         self.pipeline = KeystrokePipeline(block_size=window_size)
         
         self.model = SecurityModel()
-        self.executor = Executor()
         
-        self.main_df = pd.DataFrame()
+        self.baselines = [] 
         self.verification_buffer = deque(maxlen=5) 
         
         self.is_verifying = False
@@ -32,45 +35,66 @@ class KeystrokeCoordinator:
         self.recorder.start()
 
     def load_baseline(self):
-        print("[*] Extracting baseline from secure database...")
+        print("[*] Searching for baseline tables in secure database...")
+        db_path = pathlib.Path.home() / ".keystroke_auth" / "baseline_records.db"
+        db_key = keyring.get_password("KeystrokeSecurityDaemon", "db_encryption_key")
+        
+        if not db_path.exists() or not db_key:
+            print("[!] Database file or encryption key not found.")
+            return False
+
+        tables = []
+        try:
+            with sqlite.connect(db_path) as conn:
+                conn.execute(f"PRAGMA key = '{db_key}';")
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'raw_baseline%';")
+                tables = [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"[!] Database access error: {e}")
+            return False
+
+        if not tables:
+            print("[!] No tables matching 'raw_baseline%' found.")
+            return False
+
+        loaded_any = False
         temp_processed = "temp_processed_baseline.csv"
         
-        try:
-            self.pipeline.build_user_profile(temp_processed)
-            
-            if os.path.exists(temp_processed):
-                self.main_df = pd.read_csv(temp_processed)
-
-                self.main_df['verification_flag'] = 'verified'
-                self.main_df['source_class'] = 'historical'
-                
-                os.remove(temp_processed)
-                print(f"[+] Baseline loaded. Locked {len(self.main_df)} 'verified' records.")
-                return True
-        except Exception as e:
-            print(f"[!] Baseline processing error: {e}")
-            if os.path.exists(temp_processed):
-                os.remove(temp_processed)
+        for table in tables:
+            try:
+                if self.pipeline.build_user_profile(temp_processed, table_name=table):
+                    df = pd.read_csv(temp_processed)
+                    df['verification_flag'] = 'verified'
+                    
+                    self.baselines.append(df) 
+                    
+                    os.remove(temp_processed)
+                    print(f"[+] Profile '{table}' loaded. Locked {len(df)} 'verified' records.")
+                    loaded_any = True
+            except Exception as e:
+                print(f"[!] Baseline processing error for {table}: {e}")
+                if os.path.exists(temp_processed):
+                    os.remove(temp_processed)
         
-        return False
+        return loaded_any
 
     def _cleanup_unverified_logs(self, block):
         block = block.copy()
         block['verification_flag'] = 'not_verified'
-        block['source_class'] = 'live_stream'
         block['timestamp'] = time.time()
         self.verification_buffer.append(block)
 
     def _check_unverified_threshold(self, anomaly_count: int) -> bool:
-        return anomaly_count >= 3
+        return anomaly_count >= 4
 
     def verify_user(self):
         if self.is_verifying:
             return
 
-        if not self.pipeline.selected_digrams:
+        if not self.baselines:
             if not self.load_baseline():
-                print("[!] No baseline. Aborting.")
+                print("[!] No baselines. Aborting.")
                 return
 
         print("\n" + "="*40)
@@ -79,7 +103,7 @@ class KeystrokeCoordinator:
         
         self.is_verifying = True
         self.recorder.is_running = True  
-        self._recorder_thread = threading.Thread(target=self.recorder.start, daemon=True)
+        self._recorder_thread = threading.Thread(target=self.recorder.start, kwargs={"mode": "verify"}, daemon=True)
         self._recorder_thread.start()
 
         blocks_since_last_train = 0
@@ -87,31 +111,29 @@ class KeystrokeCoordinator:
         try:
             def tracked_stream():
                 for r in self.recorder.stream_records():
-                    print(f" [Stream] Recorder output: {r.strip()}") 
                     yield r
 
-            print(f" [Coordinator] Golden digrams extracted from baseline: {len(self.pipeline.selected_digrams)}")
-
             for block in self.pipeline.process_stream(tracked_stream()):
-                print(f" [Coordinator] Pipeline returned a block! Size: {block.shape}") 
-                
+
                 self._cleanup_unverified_logs(block)
                 blocks_since_last_train += 1
 
-                if len(self.verification_buffer) < 5 or self.main_df.empty:
+                if len(self.verification_buffer) < 5 or not self.baselines:
                     print(f" [Coordinator] Buffer has {len(self.verification_buffer)}/5. Collecting more...")
                     continue
 
                 if self.model.needs_training(blocks_since_last_train):
-                    temp_df = pd.concat([self.main_df] + list(self.verification_buffer), ignore_index=True)
-                    self.model.train(temp_df)
+                    buffer_df = pd.concat(list(self.verification_buffer), ignore_index=True)
+                    self.model.train(self.baselines, buffer_df)
                     blocks_since_last_train = 0
 
-                anomaly_count, df_for_model = self.model.evaluate_buffer(list(self.verification_buffer))
-                print(f"[{time.strftime('%H:%M:%S')}] Buffer scanned. Anomalies found: {anomaly_count}/5")
+                anomaly_count = self.model.evaluate_buffer(list(self.verification_buffer))
+                print(f"[{time.strftime('%H:%M:%S')}] Buffer scanned. Most similar style anomalies: {anomaly_count}/5")
 
                 if self._check_unverified_threshold(anomaly_count):
-                    self.executor.torpedo("Intruder detected on keyboard (Threshold 3/5)")
+                    self.executor.torpedo("Intruder detected on keyboard (Threshold 4/5 across all models)")
+                    self.verification_buffer.clear()
+                    self.model.session_memory.clear()
 
         except KeyboardInterrupt:
             print("\n[!] Verification interrupted by user.")

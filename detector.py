@@ -6,54 +6,60 @@ from collections import defaultdict, deque
 class SecurityModel:
     def __init__(self, random_state=42):
         self.random_state = random_state
-        self.model = None
+        self.models = [] 
         
         self.session_memory = defaultdict(lambda: deque(maxlen=3)) 
         
-        self.current_medians = None
+        self.current_medians_list = []
 
     def needs_training(self, blocks_since_last_train: int) -> bool:
-        return self.model is None or blocks_since_last_train >= 50
+        return not self.models or blocks_since_last_train >= 50
 
-    def train(self, df_mix: pd.DataFrame):
-        exclude_cols = ['verification_flag', 'source_class', 'status', 'timestamp']
-        features = [col for col in df_mix.columns if col not in exclude_cols]
+    def train(self, baselines: list, buffer_df: pd.DataFrame):
+        self.models = []
+        self.current_medians_list = []
+        exclude_cols = ['verification_flag', 'status', 'timestamp']
 
-        df_features = df_mix[features].copy()
-        
-        self.current_medians = df_features.median()
-        
-        contamination_ratio = 5 / len(df_mix)
-        
-        if contamination_ratio >= 0.2:
-             raise ValueError(f"Contamination ratio {contamination_ratio:.4f} is too high. Need more user data.")
+        for baseline_df in baselines:
+            baseline_features = [col for col in baseline_df.columns if col not in exclude_cols]
+            
+            buffer_subset = buffer_df.reindex(columns=baseline_features)
+            
+            df_mix = pd.concat([baseline_df[baseline_features], buffer_subset], ignore_index=True)
 
-        self.model = IsolationForest(
-            contamination=contamination_ratio,
-            random_state=self.random_state,
-            n_jobs=-1  
-        )
-        
-        print(f"[*] Isolation Forest training. Contamination: {contamination_ratio:.4f}")
-        self.model.fit(df_features)
+            medians = df_mix.median()
+            self.current_medians_list.append(medians)
+            
+            df_features = df_mix.fillna(medians).fillna(0)
+            
+            contamination_ratio = 5 / len(df_mix)
+            
+            if contamination_ratio > 0.2:
+                 raise ValueError(f"Contamination ratio {contamination_ratio:.4f} is too high. Need more user data.")
+
+            model = IsolationForest(
+                contamination=contamination_ratio,
+                random_state=self.random_state,
+                n_jobs=-1  
+            )
+            model.fit(df_features)
+            self.models.append(model)
+            
+        print(f"[*] Ensemble training complete. {len(self.models)} models trained.")
 
     def evaluate_buffer(self, buffer_list: list) -> int:
-        if self.model is None:
-            raise ValueError("Model wasn't trained.")
+        if not self.models:
+            raise ValueError("Models weren't trained.")
 
         buffer_df = pd.concat(buffer_list, ignore_index=True)
-        exclude_cols = ['verification_flag', 'source_class', 'status', 'timestamp']
+        exclude_cols = ['verification_flag', 'status', 'timestamp']
         features = [col for col in buffer_df.columns if col not in exclude_cols]
+        df_features_raw = buffer_df[features].copy()
 
-        df_features = buffer_df[features].copy()
-        df_features = df_features.reindex(columns=self.current_medians.index)
-
-
-        for col in df_features.columns:
-            valid_values = df_features[col].dropna().tolist()
+        for col in df_features_raw.columns:
+            valid_values = df_features_raw[col].dropna().tolist()
             if valid_values:
                 self.session_memory[col].extend(valid_values)
-
 
         session_medians_dict = {}
         for col, vals in self.session_memory.items():
@@ -64,13 +70,19 @@ class SecurityModel:
                 
         session_medians = pd.Series(session_medians_dict, dtype=float)
 
+        best_anomaly_count = float('inf')
 
-        df_for_model = df_features.copy()
+        for model, medians in zip(self.models, self.current_medians_list):
+            df_features = df_features_raw.reindex(columns=medians.index)
+            df_for_model = df_features.copy()
 
-        df_for_model = df_for_model.fillna(session_medians)
-        df_for_model = df_for_model.fillna(self.current_medians)
+            df_for_model = df_for_model.fillna(session_medians)
+            df_for_model = df_for_model.fillna(medians)
 
-        predictions = self.model.predict(df_for_model)
-        anomaly_count = (predictions == -1).sum()
-        
-        return anomaly_count, df_for_model
+            predictions = model.predict(df_for_model)
+            anomaly_count = (predictions == -1).sum()
+            
+            if anomaly_count < best_anomaly_count:
+                best_anomaly_count = anomaly_count
+
+        return best_anomaly_count
