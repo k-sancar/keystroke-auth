@@ -1,6 +1,7 @@
 import os
- 
+import ctypes
+
 class Executor:
     def torpedo(self, reason: str = "Unknown reason"):
         print(f"\n[Executor] TORPEDO — shutting down. Reason: {reason}")
-        os._exit(1)
+        ctypes.windll.user32.LockWorkStation()
