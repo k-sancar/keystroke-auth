@@ -11,7 +11,7 @@ import keyring
 import secrets
 import sys
 
-from constants import INACTIVITY_TIME, PAUSE_TIME
+from constants import APP_NAME, COLLECTION_THRESHOLD, INACTIVITY_TIME, OUTLIER_THRESHOLD, PAUSE_TIME, PAUSE_WINDOW, VERIFICATION_BUFFER_SIZE, DIR_NAME, DB_FILE, KEYRING_USER_KEY
 
 class KeystrokeRecorder:
     def __init__(self, on_torpedo_callback=None):
@@ -30,14 +30,14 @@ class KeystrokeRecorder:
         self.last_key_pressed = None
         self.last_activity_time = time.perf_counter()
         
-        self.recent_pauses = deque(maxlen=20)
-        self.recent_afk_flags = deque(maxlen=20)
+        self.recent_pauses = deque(maxlen=PAUSE_WINDOW)
+        self.recent_afk_flags = deque(maxlen=PAUSE_WINDOW)
         self.esc_pressed_once = False
         self.mode = "collect"
 
     def _get_or_create_key(self):
-        service_name = "KeystrokeSecurityDaemon"
-        user = "db_encryption_key"
+        service_name = APP_NAME
+        user = KEYRING_USER_KEY
         
         key = keyring.get_password(service_name, user)
         if not key:
@@ -72,8 +72,8 @@ class KeystrokeRecorder:
         if not self.records_for_db:
             return 
 
-        if len(self.records_for_db) < 1050:
-            print("\n[!] Rejecting records: lack of required 1050 entries.")
+        if len(self.records_for_db) < COLLECTION_THRESHOLD:
+            print(f"\n[!] Rejecting records: lack of required {COLLECTION_THRESHOLD} entries.")
             self.records_for_db.clear()
             return
 
@@ -120,14 +120,16 @@ class KeystrokeRecorder:
         current_time = time.perf_counter()
         current_pause = current_time - (self.last_press_time if self.last_press_time else current_time)
         afk_flag = self.is_outlier(current_pause)
+        
         self.last_activity_time = current_time
+        
 
         self.recent_afk_flags.append(afk_flag)
         
-        if self.mode == "verify" and sum(self.recent_afk_flags) >= 10:
-            print("\n\n[!] Too many typing anomalies (10/20). Evasion attempt detected.")
+        if self.mode == "verify" and sum(self.recent_afk_flags) >= OUTLIER_THRESHOLD:
+            print(f"\n\n[!] Too many typing anomalies ({OUTLIER_THRESHOLD}/{PAUSE_WINDOW}). Evasion attempt detected.")
             if self.on_torpedo_callback:
-                self.on_torpedo_callback("Too many typing anomalies (10/20). Evasion attempt detected.")
+                self.on_torpedo_callback(f"Too many typing anomalies ({OUTLIER_THRESHOLD}/{PAUSE_WINDOW}). Evasion attempt detected.")
             else:
                 ctypes.windll.user32.LockWorkStation()
             self.is_running = False
@@ -167,12 +169,12 @@ class KeystrokeRecorder:
                 print("\n[+] Verification completed.")
                 return False
                 
-            if len(self.records_for_db) >= 1050:
+            if len(self.records_for_db) >= COLLECTION_THRESHOLD:
                 print("\n\n[+] Collected sufficient data. Stopping listening.")
                 return False
             else:
                 if not self.esc_pressed_once:
-                    print(f"\n\n[!] WARNING: Missing {1050 - len(self.records_for_db)} entries. Table will not be saved.")
+                    print(f"\n\n[!] WARNING: Missing {COLLECTION_THRESHOLD - len(self.records_for_db)} entries. Table will not be saved.")
                     print("[!] Press ESC again to cancel and delete data, or any other key to continue typing.")
                     self.esc_pressed_once = True
                 else:
@@ -189,7 +191,7 @@ class KeystrokeRecorder:
         self.records_for_db.append((str_key, str_prev, type_str, h_time, ud_time, dd_time, uu_time, bool(afk_flag)))
 
         if self.mode == "collect":
-            print(f"\r[*] Collecting data: {len(self.records_for_db)} / 1050 entries (minimum)", end="", flush=True)
+            print(f"\r[*] Collecting data: {len(self.records_for_db)} / {COLLECTION_THRESHOLD} entries (minimum)", end="", flush=True)
 
     def on_mouse_activity(self, *args):
         self.last_activity_time = time.perf_counter()
@@ -241,8 +243,8 @@ class KeystrokeRecorder:
                     if time.perf_counter() - self.last_activity_time > INACTIVITY_TIME:
                         print("\n\n[!] Inactivity detected. Locking screen and stopping listener.")
                         ctypes.windll.user32.LockWorkStation()
-                        if self.mode == "collect" and len(self.records_for_db) < 1050:
-                            print("[-] Session rejected: Not enough entries (<1050) before disconnection.")
+                        if self.mode == "collect" and len(self.records_for_db) < COLLECTION_THRESHOLD:
+                            print(f"[-] Session rejected: Not enough entries ({COLLECTION_THRESHOLD}) before disconnection.")
                             self.records_for_db.clear()
                         listener.stop()
                         mouse_listener.stop()

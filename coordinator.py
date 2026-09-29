@@ -7,13 +7,14 @@ import keyring
 from sqlcipher3 import dbapi2 as sqlite
 from collections import deque
 
+from constants import DB_FILE, DIR_NAME, APP_NAME, KEYRING_USER_KEY, VERIFICATION_BUFFER_SIZE, WARN_THRESHOLD, BLOCK_SIZE
 from input import KeystrokeRecorder
 from digram import KeystrokePipeline
 from detector import SecurityModel
 from executor import Executor
 
 class KeystrokeCoordinator:
-    def __init__(self, window_size=50):
+    def __init__(self, window_size=BLOCK_SIZE):
         self.executor = Executor()
         
         self.recorder = KeystrokeRecorder(on_torpedo_callback=self.executor.torpedo)
@@ -22,7 +23,7 @@ class KeystrokeCoordinator:
         self.model = SecurityModel()
         
         self.baselines = [] 
-        self.verification_buffer = deque(maxlen=5) 
+        self.verification_buffer = deque(maxlen=VERIFICATION_BUFFER_SIZE) 
         
         self.is_verifying = False
         self._recorder_thread = None
@@ -36,8 +37,8 @@ class KeystrokeCoordinator:
 
     def load_baseline(self):
         print("[*] Searching for baseline tables in secure database...")
-        db_path = pathlib.Path.home() / ".keystroke_auth" / "baseline_records.db"
-        db_key = keyring.get_password("KeystrokeSecurityDaemon", "db_encryption_key")
+        db_path = pathlib.Path.home() / DIR_NAME / DB_FILE
+        db_key = keyring.get_password(APP_NAME, KEYRING_USER_KEY)
         
         if not db_path.exists() or not db_key:
             print("[!] Database file or encryption key not found.")
@@ -86,7 +87,7 @@ class KeystrokeCoordinator:
         self.verification_buffer.append(block)
 
     def _check_unverified_threshold(self, anomaly_count: int) -> bool:
-        return anomaly_count >= 4
+        return anomaly_count >= WARN_THRESHOLD
 
     def verify_user(self):
         if self.is_verifying:
@@ -118,8 +119,8 @@ class KeystrokeCoordinator:
                 self._cleanup_unverified_logs(block)
                 blocks_since_last_train += 1
 
-                if len(self.verification_buffer) < 5 or not self.baselines:
-                    print(f" [Coordinator] Buffer has {len(self.verification_buffer)}/5. Collecting more...")
+                if len(self.verification_buffer) < VERIFICATION_BUFFER_SIZE or not self.baselines:
+                    print(f" [Coordinator] Buffer has {len(self.verification_buffer)}/{VERIFICATION_BUFFER_SIZE}. Collecting more...")
                     continue
 
                 if self.model.needs_training(blocks_since_last_train):
@@ -128,10 +129,10 @@ class KeystrokeCoordinator:
                     blocks_since_last_train = 0
 
                 anomaly_count = self.model.evaluate_buffer(list(self.verification_buffer))
-                print(f"[{time.strftime('%H:%M:%S')}] Buffer scanned. Most similar style anomalies: {anomaly_count}/5")
+                print(f"[{time.strftime('%H:%M:%S')}] Buffer scanned. Most similar style anomalies: {anomaly_count}/{VERIFICATION_BUFFER_SIZE}")
 
                 if self._check_unverified_threshold(anomaly_count):
-                    self.executor.torpedo("Intruder detected on keyboard (Threshold 4/5 across all models)")
+                    self.executor.torpedo(f"Intruder detected on keyboard (Threshold {WARN_THRESHOLD}/{VERIFICATION_BUFFER_SIZE} across all models)")
                     self.verification_buffer.clear()
                     self.model.session_memory.clear()
 
@@ -150,7 +151,7 @@ class KeystrokeCoordinator:
         print("\n[*] Session ended.")
 
     def reset_database(self):
-        db_path = pathlib.Path.home() / ".keystroke_auth" / "baseline_records.db"
+        db_path = pathlib.Path.home() / DIR_NAME / DB_FILE
         
         if db_path.exists():
             os.remove(db_path)

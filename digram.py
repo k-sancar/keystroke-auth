@@ -4,10 +4,10 @@ import pathlib
 import keyring
 from sqlcipher3 import dbapi2 as sqlite
 
-from constants import MIN_FREQ
+from constants import APP_NAME, BLOCK_SIZE, DB_FILE, DIR_NAME, KEYRING_USER_KEY, MAX_DIGRAMS, MIN_DIGRAMS, MIN_FREQ, DIGRAM_SCALING_FACTOR, STABLE_DIGRAM_QUANTILE
 
 class KeystrokePipeline:
-    def __init__(self, block_size: int = 50):
+    def __init__(self, block_size: int = BLOCK_SIZE):
         self.block_size = block_size
         self.df_digrams = None
         self.global_selected_digrams = set()
@@ -87,14 +87,14 @@ class KeystrokePipeline:
                 buffer = []
     
     def _generate_digrams(self, table_name="raw_baseline"):
-        app_dir = pathlib.Path.home() / ".keystroke_auth"
-        db_path = app_dir / "baseline_records.db"
+        app_dir = pathlib.Path.home() / DIR_NAME
+        db_path = app_dir / DB_FILE
         
         if not db_path.exists():
             print(f"[!] Error: Database file {db_path} not found.")
             return False
             
-        db_key = keyring.get_password("KeystrokeSecurityDaemon", "db_encryption_key")
+        db_key = keyring.get_password(APP_NAME, KEYRING_USER_KEY)
         if not db_key:
             print("[!] Error: Encryption key missing from Windows Credential Manager.")
             return False
@@ -177,14 +177,13 @@ class KeystrokePipeline:
             'Frequency': freq_filtered
         }).fillna(999).sort_values(by='Variance_Sum')
 
-        variance_limit = stats['Variance_Sum'].quantile(0.25)
+        variance_limit = stats['Variance_Sum'].quantile(STABLE_DIGRAM_QUANTILE)
         stable_digrams = stats[stats['Variance_Sum'] <= variance_limit].copy()
         
         stable_digrams = stable_digrams.sort_values(by='Frequency', ascending=False)
         
-        dynamic_max = max(2, len(self.df_digrams) // 300)
-        HARD_MAX = 12 
-        n_final = min(dynamic_max, HARD_MAX, len(stable_digrams))
+        dynamic_max = max(MIN_DIGRAMS, len(self.df_digrams) // DIGRAM_SCALING_FACTOR)
+        n_final = min(dynamic_max, MAX_DIGRAMS, len(stable_digrams))
         
         if n_final == 0:
             n_final = 1

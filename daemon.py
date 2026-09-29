@@ -8,19 +8,20 @@ import win32ts
 import keyring
 from sqlcipher3 import dbapi2 as sqlite
 
+from constants import APP_NAME, BASELINE_TABLE_PREFIX, DB_FILE, DIR_NAME, KEYRING_USER_KEY
 from coordinator import KeystrokeCoordinator
 
 class KeystrokeDaemon:
     def __init__(self, main_script_path: str):
         self.coordinator = KeystrokeCoordinator()
         self.is_active = False
-        self.app_dir = pathlib.Path.home() / ".keystroke_auth"
-        self.db_path = self.app_dir / "baseline_records.db"
+        self.app_dir = pathlib.Path.home() / DIR_NAME
+        self.db_path = self.app_dir / DB_FILE
         self.main_script_path = main_script_path
 
     def setup_autostart(self):
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        app_name = "KeystrokeSecurityDaemon"
+        app_name = APP_NAME
         
         python_exe = sys.executable.replace("python.exe", "pythonw.exe")
         command = f'"{python_exe}" "{self.main_script_path}"'
@@ -37,7 +38,7 @@ class KeystrokeDaemon:
         if not self.db_path.exists():
             return 0
             
-        db_key = keyring.get_password("KeystrokeSecurityDaemon", "db_encryption_key")
+        db_key = keyring.get_password(APP_NAME, KEYRING_USER_KEY)
         if not db_key:
             return 0
 
@@ -45,7 +46,7 @@ class KeystrokeDaemon:
             with sqlite.connect(self.db_path) as conn:
                 conn.execute(f"PRAGMA key = '{db_key}';")
                 cursor = conn.cursor()
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'raw_baseline%';")
+                cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '{BASELINE_TABLE_PREFIX}%';")
                 tables = [row[0] for row in cursor.fetchall()]
 
         except Exception as e:

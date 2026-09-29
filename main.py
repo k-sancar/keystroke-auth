@@ -1,13 +1,14 @@
 import os
 import pathlib
 import sys
+from constants import DIR_NAME, LOG_FILE
 from daemon import KeystrokeDaemon
 from coordinator import KeystrokeCoordinator
 
 def setup_logging():
-    log_dir = pathlib.Path.home() / ".keystroke_auth"
+    log_dir = pathlib.Path.home() / DIR_NAME
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(log_dir / "daemon_background.log", "a", encoding="utf-8")
+    log_file = open(log_dir / LOG_FILE , "a", encoding="utf-8")
     
     sys.stdout = log_file
     sys.stderr = log_file

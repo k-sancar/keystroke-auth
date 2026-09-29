@@ -3,6 +3,8 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 from collections import defaultdict, deque
 
+from constants import MAX_CONTAMINATION_RATIO, RETRAIN_BLOCK_INTERVAL, VERIFICATION_BUFFER_SIZE
+
 class SecurityModel:
     def __init__(self, random_state=42):
         self.random_state = random_state
@@ -13,7 +15,7 @@ class SecurityModel:
         self.current_medians_list = []
 
     def needs_training(self, blocks_since_last_train: int) -> bool:
-        return not self.models or blocks_since_last_train >= 50
+        return not self.models or blocks_since_last_train >= RETRAIN_BLOCK_INTERVAL
 
     def train(self, baselines: list, buffer_df: pd.DataFrame):
         self.models = []
@@ -32,9 +34,9 @@ class SecurityModel:
             
             df_features = df_mix.fillna(medians).fillna(0)
             
-            contamination_ratio = 5 / len(df_mix)
+            contamination_ratio = VERIFICATION_BUFFER_SIZE / len(df_mix)
             
-            if contamination_ratio > 0.2:
+            if contamination_ratio > MAX_CONTAMINATION_RATIO:
                  raise ValueError(f"Contamination ratio {contamination_ratio:.4f} is too high. Need more user data.")
 
             model = IsolationForest(
