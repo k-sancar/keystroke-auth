@@ -66,8 +66,16 @@ class KeystrokeCoordinator:
             try:
                 if self.pipeline.build_user_profile(temp_processed, table_name=table):
                     df = pd.read_csv(temp_processed)
+
+                    if len(df) < 20:
+                        with sqlite.connect(db_path) as conn:
+                            conn.execute(f"PRAGMA key = '{db_key}';")
+                            conn.execute(f"DROP TABLE {table};")
+                        print(f"[-] Deleted {table} from database (too few records).")
+                        os.remove(temp_processed)
+                        continue
+
                     df['verification_flag'] = 'verified'
-                    
                     self.baselines.append(df) 
                     
                     os.remove(temp_processed)
@@ -80,7 +88,7 @@ class KeystrokeCoordinator:
         
         return loaded_any
 
-    def _cleanup_unverified_logs(self, block):
+    def _add_to_verification_buffer(self, block):
         block = block.copy()
         block['verification_flag'] = 'not_verified'
         block['timestamp'] = time.time()
@@ -110,13 +118,9 @@ class KeystrokeCoordinator:
         blocks_since_last_train = 0
 
         try:
-            def tracked_stream():
-                for r in self.recorder.stream_records():
-                    yield r
+            for block in self.pipeline.process_stream(self.recorder.stream_records()):
 
-            for block in self.pipeline.process_stream(tracked_stream()):
-
-                self._cleanup_unverified_logs(block)
+                self._add_to_verification_buffer(block)
                 blocks_since_last_train += 1
 
                 if len(self.verification_buffer) < VERIFICATION_BUFFER_SIZE or not self.baselines:
