@@ -60,31 +60,24 @@ class KeystrokeCoordinator:
             return False
 
         loaded_any = False
-        temp_processed = "temp_processed_baseline.csv"
         
         for table in tables:
             try:
-                if self.pipeline.build_user_profile(temp_processed, table_name=table):
-                    df = pd.read_csv(temp_processed)
+                df = self.pipeline.build_user_profile(table_name=table)
+                if len(df) < 20:
+                    with sqlite.connect(db_path) as conn:
+                        conn.execute(f"PRAGMA key = '{db_key}';")
+                        conn.execute(f"DROP TABLE {table};")
+                    print(f"[-] Deleted {table} from database (too few records).")
+                    continue
 
-                    if len(df) < 20:
-                        with sqlite.connect(db_path) as conn:
-                            conn.execute(f"PRAGMA key = '{db_key}';")
-                            conn.execute(f"DROP TABLE {table};")
-                        print(f"[-] Deleted {table} from database (too few records).")
-                        os.remove(temp_processed)
-                        continue
-
-                    df['verification_flag'] = 'verified'
-                    self.baselines.append(df) 
-                    
-                    os.remove(temp_processed)
-                    print(f"[+] Profile '{table}' loaded. Locked {len(df)} 'verified' records.")
-                    loaded_any = True
+                df['verification_flag'] = 'verified'
+                self.baselines.append(df) 
+                
+                print(f"[+] Profile '{table}' loaded. Locked {len(df)} 'verified' records.")
+                loaded_any = True
             except Exception as e:
                 print(f"[!] Baseline processing error for {table}: {e}")
-                if os.path.exists(temp_processed):
-                    os.remove(temp_processed)
         
         return loaded_any
 

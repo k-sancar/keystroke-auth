@@ -210,7 +210,7 @@ class KeystrokePipeline:
         df_wide = df_wide.interpolate(method='linear').ffill().bfill()
         self.df_final_blocks = df_wide.fillna(0)
 
-    def build_user_profile(self, output_csv: str, table_name: str = "raw_baseline"):
+    def build_user_profile(self, table_name: str = "raw_baseline"):
         print(f"[*] Extracting baseline data from local secure database (table: {table_name}) ...")
         
         if not self._generate_digrams(table_name):
@@ -228,9 +228,8 @@ class KeystrokePipeline:
         self._create_blocks(specific_digrams)
         
         if not self.df_final_blocks.empty:
-            self.df_final_blocks.to_csv(output_csv, index=False)
             print(f"[+] Successfully completed! Created {len(self.df_final_blocks)} blocks.")
-            return True
+            return self.df_final_blocks
         else:
             print("[!] Error: Resulting DataFrame is empty.")
-            return False
+            return None
