@@ -60,6 +60,9 @@ OUTLIER_THRESHOLD = 10
 #===================DAEMON===================
 APP_NAME = "KeystrokeSecurityDaemon"
 """Name of the application for autostart in Windows Registry"""
+
+AUTOSTART_REGISTRY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+"""Registry path for autostart in Windows"""
 #===========PAUSE DETECTION===================
 INACTIVITY_TIME = 60
 """Time of inactivity after which the program stops automatically (seconds)"""

@@ -14,6 +14,8 @@ class KeystrokePipeline:
         self.df_final_blocks = None
         self.baseline_means = {}
 
+#=====================Extracting digram blocks from stream=====================
+
     def _parse_raw_record(self, record_str, last_h):
         if record_str.startswith("Key,"): 
             return None, last_h
@@ -85,7 +87,9 @@ class KeystrokePipeline:
                 if not block.empty:
                     yield block
                 buffer = []
-    
+
+#=====================Extracting digram blocks from baseline records=====================
+
     def _generate_digrams(self, table_name="raw_baseline"):
         app_dir = pathlib.Path.home() / DIR_NAME
         db_path = app_dir / DB_FILE

@@ -11,7 +11,7 @@ import keyring
 import secrets
 import sys
 
-from constants import APP_NAME, COLLECTION_THRESHOLD, INACTIVITY_TIME, OUTLIER_THRESHOLD, PAUSE_TIME, PAUSE_WINDOW, VERIFICATION_BUFFER_SIZE, DIR_NAME, DB_FILE, KEYRING_USER_KEY
+from constants import APP_NAME, COLLECTION_THRESHOLD, INACTIVITY_TIME, OUTLIER_THRESHOLD, PAUSE_TIME, PAUSE_WINDOW, KEYRING_USER_KEY
 
 class KeystrokeRecorder:
     def __init__(self, on_torpedo_callback=None):
@@ -32,7 +32,7 @@ class KeystrokeRecorder:
         
         self.recent_pauses = deque(maxlen=PAUSE_WINDOW)
         self.recent_afk_flags = deque(maxlen=PAUSE_WINDOW)
-        self.esc_pressed_once = False
+        self.esc_pressed_before = False
         self.mode = "collect"
 
     def _get_or_create_key(self):
@@ -127,9 +127,10 @@ class KeystrokeRecorder:
         self.recent_afk_flags.append(afk_flag)
         
         if self.mode == "verify" and sum(self.recent_afk_flags) >= OUTLIER_THRESHOLD:
-            print(f"\n\n[!] Too many typing anomalies ({OUTLIER_THRESHOLD}/{PAUSE_WINDOW}). Evasion attempt detected.")
+            message = f"\n\n[!] Too many typing anomalies ({OUTLIER_THRESHOLD}/{PAUSE_WINDOW}). Evasion attempt detected."
+            print(message)
             if self.on_torpedo_callback:
-                self.on_torpedo_callback(f"Too many typing anomalies ({OUTLIER_THRESHOLD}/{PAUSE_WINDOW}). Evasion attempt detected.")
+                self.on_torpedo_callback(message)
             else:
                 ctypes.windll.user32.LockWorkStation()
             self.is_running = False
@@ -160,8 +161,8 @@ class KeystrokeRecorder:
         h_time = current_release_time - start_time
         type_str = "not faked" 
 
-        str_key = str(key).replace("'", "")
-        str_prev = str(prev_key).replace("'", "") if prev_key else "None"
+        str_key = str(key)
+        str_prev = str(prev_key) if prev_key else "None"
         record_string = f"{str_key}, {str_prev}, {type_str}, {h_time}, {ud_time}, {dd_time}, {uu_time}, {afk_flag}"
 
         if key == keyboard.Key.esc:
@@ -173,18 +174,18 @@ class KeystrokeRecorder:
                 print("\n\n[+] Collected sufficient data. Stopping listening.")
                 return False
             else:
-                if not self.esc_pressed_once:
+                if not self.esc_pressed_before:
                     print(f"\n\n[!] WARNING: Missing {COLLECTION_THRESHOLD - len(self.records_for_db)} entries. Table will not be saved.")
                     print("[!] Press ESC again to cancel and delete data, or any other key to continue typing.")
-                    self.esc_pressed_once = True
+                    self.esc_pressed_before = True
                 else:
                     print("\n[-] Session cancelled. Data deleted from memory.")
                     self.records_for_db.clear()
                     return False
         else:
-            if self.mode == "collect" and self.esc_pressed_once:
+            if self.mode == "collect" and self.esc_pressed_before:
                 print(f"\n[*] Resumed data collection. Keep typing...", end="")
-                self.esc_pressed_once = False
+                self.esc_pressed_before = False
 
         if self.mode == "verify":
             self.record_queue.put(record_string)
@@ -224,7 +225,7 @@ class KeystrokeRecorder:
             print(f"[*] Began listening (Mode: Verify). (AFK detection: {INACTIVITY_TIME}s, Finish: ESC)")
             
         self.is_running = True
-        self.esc_pressed_once = False
+        self.esc_pressed_before = False
 
         mouse_listener = mouse.Listener(
             on_move=self.on_mouse_activity,

