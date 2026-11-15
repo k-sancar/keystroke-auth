@@ -63,7 +63,11 @@ class KeystrokePipeline:
         
         if df.empty:
             return pd.DataFrame()
-            
+
+        df = df[df['Digram'].isin(self.global_selected_digrams)]
+        if df.empty:
+            return pd.DataFrame()
+
         df_grouped = df.groupby('Digram')[features].mean().reset_index()
         df_grouped['dummy'] = 0
         
